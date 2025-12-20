@@ -1,3 +1,4 @@
+import math
 from fastapi import Body
 from typing import Union
 import re, os, tempfile, subprocess
@@ -16,19 +17,54 @@ class Req(BaseModel):
 
 import re
 
-def parse_filament_g(gcode: str) -> float:
-    patterns = [
-        r"filament used \\[g\\] *= *([0-9.]+)",
-        r"Filament used: *([0-9.]+) *g",
-    ]
+import math
 
+def parse_filament_g(gcode: str, material: str = "PLA", filament_diameter_mm: float = 1.75) -> float:
+    # 1) Try grams directly
+    gram_patterns = [
+        r"filament used \[g\]\s*=\s*([0-9.]+)",
+        r"filament used\s*=\s*([0-9.]+)\s*g",
+        r"Filament used:\s*([0-9.]+)\s*g",
+    ]
     for line in gcode.splitlines():
-        for p in patterns:
-            m = re.search(p, line)
+        for p in gram_patterns:
+            m = re.search(p, line, re.IGNORECASE)
             if m:
                 return float(m.group(1))
 
-    return 0.0
+    # 2) Try filament length (mm or m)
+    length_mm = None
+    length_patterns = [
+        (r"filament used \[mm\]\s*=\s*([0-9.]+)", "mm"),
+        (r"filament used\s*=\s*([0-9.]+)\s*mm", "mm"),
+        (r"filament used\s*=\s*([0-9.]+)\s*m\b", "m"),
+    ]
+    for line in gcode.splitlines():
+        for p, unit in length_patterns:
+            m = re.search(p, line, re.IGNORECASE)
+            if m:
+                val = float(m.group(1))
+                length_mm = val * 1000.0 if unit == "m" else val
+                break
+        if length_mm is not None:
+            break
+
+    if length_mm is None:
+        return 0.0
+
+    # Density (g/cm³)
+    mat = material.upper()
+    density = 1.24  # PLA
+    if mat == "PETG":
+        density = 1.27
+
+    radius_mm = filament_diameter_mm / 2.0
+    area_mm2 = math.pi * (radius_mm ** 2)
+    volume_mm3 = area_mm2 * length_mm
+    volume_cm3 = volume_mm3 / 1000.0
+
+    return volume_cm3 * density
+
 
 
 def parse_time_seconds(txt: str) -> int:
@@ -103,7 +139,8 @@ def estimate(payload: Union[Req, str] = Body(...)):
             slice_with_prusa(model_path, out_gcode, req.material, req.quality, req.supports)
 
             gcode = open(out_gcode, "r", encoding="utf-8", errors="ignore").read()
-            g = parse_filament_g(gcode)
+            g = parse_filament_g(gcode, req.material)
+
             t = parse_time_seconds(gcode)
 
             if g < 0 or t < 0:
@@ -115,10 +152,6 @@ def estimate(payload: Union[Req, str] = Body(...)):
             }
 
     except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(500, str(e))
-
         raise
     except Exception as e:
         raise HTTPException(500, str(e))

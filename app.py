@@ -39,9 +39,6 @@ def slice_with_prusa(model_path: str, out_gcode: str, material: str, quality: st
     mat = f"profiles/{material.lower()}.ini"
     qual = f"profiles/{quality}.ini"
 
-    if not (os.path.exists(base) and os.path.exists(mat) and os.path.exists(qual)):
-        raise RuntimeError("Missing profile files")
-
     cmd = [
         "prusa-slicer",
         "--slice",
@@ -52,12 +49,13 @@ def slice_with_prusa(model_path: str, out_gcode: str, material: str, quality: st
         model_path
     ]
 
-    cmd.insert(-2, "--support-material")
-    cmd.insert(-2, "1" if supports else "0")
+    # Safer: set config keys explicitly
+    cmd += ["--set", f"support_material={'1' if supports else '0'}"]
 
     p = subprocess.run(cmd, capture_output=True, text=True)
     if p.returncode != 0:
         raise RuntimeError(p.stderr[:800])
+
 
 from fastapi import Request
 

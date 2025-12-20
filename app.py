@@ -39,22 +39,32 @@ def slice_with_prusa(model_path: str, out_gcode: str, material: str, quality: st
     mat = f"profiles/{material.lower()}.ini"
     qual = f"profiles/{quality}.ini"
 
+    if not (os.path.exists(base) and os.path.exists(mat) and os.path.exists(qual)):
+        raise RuntimeError("Missing profile files")
+
     cmd = [
         "prusa-slicer",
         "--slice",
         "--load", base,
         "--load", mat,
         "--load", qual,
-        "--output", out_gcode,
+    ]
+
+    # PrusaSlicer CLI: supports are enabled by adding --support-material (no value).
+    # If supports=False, we simply do NOT include the flag. :contentReference[oaicite:1]{index=1}
+    if supports:
+        cmd += ["--support-material"]
+
+    cmd += [
+        "--export-gcode",
+        f"--output={out_gcode}",
         model_path
     ]
 
-    # Safer: set config keys explicitly
-    cmd += ["--set", f"support_material={'1' if supports else '0'}"]
-
     p = subprocess.run(cmd, capture_output=True, text=True)
     if p.returncode != 0:
-        raise RuntimeError(p.stderr[:800])
+        raise RuntimeError((p.stderr or p.stdout)[:1200])
+
 
 
 from fastapi import Request

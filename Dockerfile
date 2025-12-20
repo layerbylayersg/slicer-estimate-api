@@ -2,10 +2,12 @@ FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y \
     wget ca-certificates \
-    libgl1 libglu1-mesa libgtk-3-0 libx11-6 libxext6 libxrender1 libxrandr2 libxi6 \
+    libgl1 libegl1 libgles2 libglu1-mesa \
+    libgtk-3-0 libx11-6 libxext6 libxrender1 libxrandr2 libxi6 \
     libxfixes3 libxcursor1 libxinerama1 libasound2 libatk1.0-0 libatk-bridge2.0-0 \
     libcairo2 libpango-1.0-0 libpangocairo-1.0-0 \
     && rm -rf /var/lib/apt/lists/*
+
 
 WORKDIR /app
 

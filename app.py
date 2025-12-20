@@ -1,3 +1,5 @@
+from fastapi import Body
+from typing import Union
 import re, os, tempfile, subprocess
 import requests
 from fastapi import FastAPI, HTTPException
@@ -60,21 +62,13 @@ def slice_with_prusa(model_path: str, out_gcode: str, material: str, quality: st
 from fastapi import Request
 
 @app.post("/estimate")
-async def estimate(request: Request):
+def estimate(payload: Union[Req, str] = Body(...)):
     try:
-        data = await request.json()
-
-        # Handle Swagger / bad input cases
-        if isinstance(data, str):
-            data = {"file_url": data}
-        if isinstance(data, (int, float)):
-            data = {"file_url": str(data)}
-
-        # Validate input
-        try:
-            req = Req.model_validate(data)   # pydantic v2
-        except AttributeError:
-            req = Req.parse_obj(data)        # pydantic v1
+        # Allow sending just a URL string
+        if isinstance(payload, str):
+            req = Req(file_url=payload)
+        else:
+            req = payload
 
         with tempfile.TemporaryDirectory() as tmp:
             name = str(req.file_url).split("?")[0].split("/")[-1]
@@ -85,13 +79,7 @@ async def estimate(request: Request):
             out_gcode = os.path.join(tmp, "out.gcode")
 
             download(str(req.file_url), model_path)
-            slice_with_prusa(
-                model_path,
-                out_gcode,
-                req.material,
-                req.quality,
-                req.supports
-            )
+            slice_with_prusa(model_path, out_gcode, req.material, req.quality, req.supports)
 
             gcode = open(out_gcode, "r", encoding="utf-8", errors="ignore").read()
             g = parse_filament_g(gcode)
@@ -106,6 +94,10 @@ async def estimate(request: Request):
             }
 
     except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
         raise
     except Exception as e:
         raise HTTPException(500, str(e))

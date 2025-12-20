@@ -9,11 +9,18 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-RUN wget -q https://github.com/prusa3d/PrusaSlicer/releases/download/version_2.7.4/PrusaSlicer-2.7.4+linux-x64-GTK3-202404040919.tar.gz \
-    && tar -xzf PrusaSlicer-2.7.4+linux-x64-GTK3-202404040919.tar.gz \
-    && mv PrusaSlicer-2.7.4+linux-x64-GTK3-202404040919 /opt/prusaslicer \
-    && ln -s /opt/prusaslicer/prusa-slicer /usr/local/bin/prusa-slicer \
-    && rm PrusaSlicer-2.7.4+linux-x64-GTK3-202404040919.tar.gz
+# PrusaSlicer (Linux x64 archive)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bzip2 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN wget -q -O /tmp/prusaslicer.tar.bz2 \
+    https://github.com/prusa3d/PrusaSlicer/releases/download/version_2.7.4/PrusaSlicer-2.7.4+linux-x64-GTK3-202404050928.tar.bz2 \
+    && mkdir -p /opt/prusaslicer \
+    && tar -xjf /tmp/prusaslicer.tar.bz2 -C /opt/prusaslicer --strip-components=1 \
+    && ln -sf /opt/prusaslicer/bin/prusa-slicer /usr/local/bin/prusa-slicer \
+    && rm /tmp/prusaslicer.tar.bz2
+
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

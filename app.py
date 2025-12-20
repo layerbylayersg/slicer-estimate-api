@@ -14,9 +14,22 @@ class Req(BaseModel):
     supports: bool = False
     copies: int = 1
 
-def parse_filament_g(txt: str) -> float:
-    m = re.search(r"filament used\s*\[g\]\s*=\s*([0-9]+(?:\.[0-9]+)?)", txt)
-    return float(m.group(1)) if m else -1.0
+import re
+
+def parse_filament_g(gcode: str) -> float:
+    patterns = [
+        r"filament used \\[g\\] *= *([0-9.]+)",
+        r"Filament used: *([0-9.]+) *g",
+    ]
+
+    for line in gcode.splitlines():
+        for p in patterns:
+            m = re.search(p, line)
+            if m:
+                return float(m.group(1))
+
+    return 0.0
+
 
 def parse_time_seconds(txt: str) -> int:
     m = re.search(r"estimated printing time.*=\s*([0-9hms\s]+)", txt, re.IGNORECASE)

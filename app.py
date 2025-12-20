@@ -57,9 +57,25 @@ def slice_with_prusa(model_path: str, out_gcode: str, material: str, quality: st
     if p.returncode != 0:
         raise RuntimeError(p.stderr[:800])
 
+from fastapi import Request
+
 @app.post("/estimate")
-def estimate(req: Req):
+async def estimate(request: Request):
     try:
+        data = await request.json()
+
+        # Handle Swagger / bad input cases
+        if isinstance(data, str):
+            data = {"file_url": data}
+        if isinstance(data, (int, float)):
+            data = {"file_url": str(data)}
+
+        # Validate input
+        try:
+            req = Req.model_validate(data)   # pydantic v2
+        except AttributeError:
+            req = Req.parse_obj(data)        # pydantic v1
+
         with tempfile.TemporaryDirectory() as tmp:
             name = str(req.file_url).split("?")[0].split("/")[-1]
             if not (name.lower().endswith(".stl") or name.lower().endswith(".3mf")):
@@ -69,7 +85,13 @@ def estimate(req: Req):
             out_gcode = os.path.join(tmp, "out.gcode")
 
             download(str(req.file_url), model_path)
-            slice_with_prusa(model_path, out_gcode, req.material, req.quality, req.supports)
+            slice_with_prusa(
+                model_path,
+                out_gcode,
+                req.material,
+                req.quality,
+                req.supports
+            )
 
             gcode = open(out_gcode, "r", encoding="utf-8", errors="ignore").read()
             g = parse_filament_g(gcode)
@@ -82,6 +104,7 @@ def estimate(req: Req):
                 "print_time_seconds": t * max(1, req.copies),
                 "filament_g": round(g * max(1, req.copies), 2)
             }
+
     except HTTPException:
         raise
     except Exception as e:

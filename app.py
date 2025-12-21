@@ -228,7 +228,8 @@ def estimate(payload: Union[Req, str] = Body(...)):
 
             if g == 0:
                 resp["debug_header"] = gcode.splitlines()[:60]
-                resp["debug_e_length_mm"] = _extrusion_length_mm_from_e_axis(gcode)
+                resp["debug_e_length_mm"] = e_len
+
 
 
             return resp

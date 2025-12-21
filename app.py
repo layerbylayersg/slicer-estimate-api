@@ -20,8 +20,86 @@ class Req(BaseModel):
     copies: int = 1
 
 
+def _calc_grams_from_length_mm(length_mm: float, material: str, filament_diameter_mm: float = 1.75) -> float:
+    # Density (g/cm³)
+    mat = str(material).upper()
+    density = 1.24  # PLA default
+    if mat == "PETG":
+        density = 1.27
+
+    radius_mm = filament_diameter_mm / 2.0
+    area_mm2 = math.pi * (radius_mm ** 2)
+    volume_mm3 = area_mm2 * length_mm
+    volume_cm3 = volume_mm3 / 1000.0  # 1000 mm^3 = 1 cm^3
+    return volume_cm3 * density
+
+
+def _extrusion_length_mm_from_e_axis(gcode: str) -> float:
+    """
+    Compute filament length from the E axis.
+
+    - Supports both M82 (absolute) and M83 (relative)
+    - Handles G92 E0 resets
+    - Only sums positive extrusion (ignores retractions)
+    """
+    absolute = True  # default for many firmwares; will be set by M82/M83 if present
+    e_pos = 0.0
+    total = 0.0
+
+    # Regex to grab E value from a move line
+    e_re = re.compile(r"(?:^|\s)E(-?[0-9]*\.?[0-9]+)")
+
+    for raw in gcode.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith(";"):  # comment
+            continue
+
+        # Mode changes
+        if line.startswith("M82"):
+            absolute = True
+            continue
+        if line.startswith("M83"):
+            absolute = False
+            continue
+
+        # Reset extruder position
+        if line.startswith("G92"):
+            # Example: G92 E0 or G92 E123.4
+            m = e_re.search(line)
+            if m:
+                e_pos = float(m.group(1))
+            else:
+                # If it's G92 without E, ignore
+                pass
+            continue
+
+        # Extruding moves are typically G0/G1
+        if not (line.startswith("G0") or line.startswith("G1")):
+            continue
+
+        m = e_re.search(line)
+        if not m:
+            continue
+
+        e_val = float(m.group(1))
+
+        if absolute:
+            delta = e_val - e_pos
+            e_pos = e_val
+            if delta > 0:
+                total += delta
+        else:
+            # Relative extrusion: E value itself is the delta
+            if e_val > 0:
+                total += e_val
+
+    return max(0.0, total)
+
+
 def parse_filament_g(gcode: str, material: str = "PLA", filament_diameter_mm: float = 1.75) -> float:
-    # 1) Try grams directly
+    # 1) Try grams directly (if slicer included it)
     gram_patterns = [
         r"filament used \[g\]\s*=\s*([0-9.]+)",
         r"filament used\s*=\s*([0-9.]+)\s*g",
@@ -33,7 +111,7 @@ def parse_filament_g(gcode: str, material: str = "PLA", filament_diameter_mm: fl
             if m:
                 return float(m.group(1))
 
-    # 2) Try filament length (mm or m) then convert to grams
+    # 2) Try length summary (mm or m), then convert to grams
     length_mm = None
     length_patterns = [
         (r"filament used \[mm\]\s*=\s*([0-9.]+)", "mm"),
@@ -50,21 +128,15 @@ def parse_filament_g(gcode: str, material: str = "PLA", filament_diameter_mm: fl
         if length_mm is not None:
             break
 
-    if length_mm is None:
+    if length_mm is not None:
+        return _calc_grams_from_length_mm(length_mm, material, filament_diameter_mm)
+
+    # 3) Final fallback: compute length from E axis values
+    e_length_mm = _extrusion_length_mm_from_e_axis(gcode)
+    if e_length_mm <= 0:
         return 0.0
 
-    # Density (g/cm³)
-    mat = str(material).upper()
-    density = 1.24  # PLA default
-    if mat == "PETG":
-        density = 1.27
-
-    radius_mm = filament_diameter_mm / 2.0
-    area_mm2 = math.pi * (radius_mm ** 2)
-    volume_mm3 = area_mm2 * length_mm
-    volume_cm3 = volume_mm3 / 1000.0  # 1000 mm^3 = 1 cm^3
-
-    return volume_cm3 * density
+    return _calc_grams_from_length_mm(e_length_mm, material, filament_diameter_mm)
 
 
 def parse_time_seconds(txt: str) -> int:
@@ -79,7 +151,6 @@ def parse_time_seconds(txt: str) -> int:
 
 
 def download(url: str, out_path: str):
-    # Add a user-agent to avoid intermittent blocks/partial responses from some hosts/CDNs
     headers = {"User-Agent": "Mozilla/5.0"}
     r = requests.get(url, headers=headers, timeout=120)
     r.raise_for_status()
@@ -103,7 +174,7 @@ def slice_with_prusa(model_path: str, out_gcode: str, material: str, quality: st
         "--load", qual,
     ]
 
-    # Enable supports only by adding the flag (no 0/1 values!)
+    # Enable supports only by adding the flag (no 0/1 values)
     if supports:
         cmd += ["--support-material"]
 
@@ -121,7 +192,6 @@ def slice_with_prusa(model_path: str, out_gcode: str, material: str, quality: st
 @app.post("/estimate")
 def estimate(payload: Union[Req, str] = Body(...)):
     try:
-        # Allow sending just a URL string
         if isinstance(payload, str):
             req = Req(file_url=payload)
         else:
@@ -139,6 +209,7 @@ def estimate(payload: Union[Req, str] = Body(...)):
             slice_with_prusa(model_path, out_gcode, req.material, req.quality, req.supports)
 
             gcode = open(out_gcode, "r", encoding="utf-8", errors="ignore").read()
+
             g = parse_filament_g(gcode, req.material)
             t = parse_time_seconds(gcode)
 
@@ -150,7 +221,7 @@ def estimate(payload: Union[Req, str] = Body(...)):
                 "filament_g": round(g * max(1, req.copies), 2),
             }
 
-            # If filament still ends up 0, expose header lines for debugging
+            # Keep debug header only if filament still ended up 0
             if g == 0:
                 resp["debug_header"] = gcode.splitlines()[:60]
 

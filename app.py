@@ -36,27 +36,28 @@ def _calc_grams_from_length_mm(length_mm: float, material: str, filament_diamete
 
 def _extrusion_length_mm_from_e_axis(gcode: str) -> float:
     """
-    Compute filament length from the E axis.
-
-    - Supports both M82 (absolute) and M83 (relative)
-    - Handles G92 E0 resets
-    - Only sums positive extrusion (ignores retractions)
+    Compute filament length from the E axis (mm of filament).
+    Works for:
+      - M82 absolute extrusion
+      - M83 relative extrusion
+      - G92 E... resets
+      - E values like E.20855 (no leading 0)
+      - Inline comments
     """
-    absolute = True  # default for many firmwares; will be set by M82/M83 if present
+    absolute = True
     e_pos = 0.0
     total = 0.0
 
-    # Regex to grab E value from a move line
-    e_re = re.compile(r"(?:^|\s)E(-?[0-9]*\.?[0-9]+)")
+    # very permissive: captures E.20855, E0, E-2, E2.434
+    e_re = re.compile(r"E(-?\d*\.?\d+)")
 
     for raw in gcode.splitlines():
-        line = raw.strip()
+        # remove inline comments
+        line = raw.split(";", 1)[0].strip()
         if not line:
             continue
-        if line.startswith(";"):  # comment
-            continue
 
-        # Mode changes
+        # mode changes
         if line.startswith("M82"):
             absolute = True
             continue
@@ -64,18 +65,14 @@ def _extrusion_length_mm_from_e_axis(gcode: str) -> float:
             absolute = False
             continue
 
-        # Reset extruder position
+        # reset extruder
         if line.startswith("G92"):
-            # Example: G92 E0 or G92 E123.4
             m = e_re.search(line)
             if m:
                 e_pos = float(m.group(1))
-            else:
-                # If it's G92 without E, ignore
-                pass
             continue
 
-        # Extruding moves are typically G0/G1
+        # only consider move commands
         if not (line.startswith("G0") or line.startswith("G1")):
             continue
 
@@ -91,11 +88,11 @@ def _extrusion_length_mm_from_e_axis(gcode: str) -> float:
             if delta > 0:
                 total += delta
         else:
-            # Relative extrusion: E value itself is the delta
             if e_val > 0:
                 total += e_val
 
     return max(0.0, total)
+
 
 
 def parse_filament_g(gcode: str, material: str = "PLA", filament_diameter_mm: float = 1.75) -> float:

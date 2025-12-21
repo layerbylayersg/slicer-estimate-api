@@ -211,6 +211,12 @@ def estimate(payload: Union[Req, str] = Body(...)):
 
             g = parse_filament_g(gcode, req.material)
             t = parse_time_seconds(gcode)
+            
+            # HARD fallback: if parser returns 0 but we can detect extrusion, compute grams from E axis
+            e_len = _extrusion_length_mm_from_e_axis(gcode)
+            if g == 0 and e_len > 0:
+                g = _calc_grams_from_length_mm(e_len, req.material)
+
 
             if t < 0:
                 raise RuntimeError("Failed to read slicer output")

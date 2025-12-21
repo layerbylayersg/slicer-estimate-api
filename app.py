@@ -37,19 +37,20 @@ def _calc_grams_from_length_mm(length_mm: float, material: str, filament_diamete
 def _extrusion_length_mm_from_e_axis(gcode: str) -> float:
     """
     Compute filament length from the E axis (mm of filament).
-    Works for:
+    Supports:
       - M82 absolute extrusion
       - M83 relative extrusion
       - G92 E... resets
-      - E values like E.20855 (no leading 0)
-      - Inline comments
+      - E.20855 (no leading 0)
+      - lowercase e
+      - inline comments
     """
     absolute = True
     e_pos = 0.0
     total = 0.0
 
-    # very permissive: captures E.20855, E0, E-2, E2.434
-    e_re = re.compile(r"E(-?\d*\.?\d+)")
+    # Case-insensitive E/e
+    e_re = re.compile(r"[Ee](-?\d*\.?\d+)")
 
     for raw in gcode.splitlines():
         # remove inline comments
@@ -92,6 +93,7 @@ def _extrusion_length_mm_from_e_axis(gcode: str) -> float:
                 total += e_val
 
     return max(0.0, total)
+
 
 
 
@@ -218,9 +220,10 @@ def estimate(payload: Union[Req, str] = Body(...)):
                 "filament_g": round(g * max(1, req.copies), 2),
             }
 
-            # Keep debug header only if filament still ended up 0
             if g == 0:
                 resp["debug_header"] = gcode.splitlines()[:60]
+                resp["debug_e_length_mm"] = _extrusion_length_mm_from_e_axis(gcode)
+
 
             return resp
 

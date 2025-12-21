@@ -1,12 +1,16 @@
-import math
-from fastapi import Body
+from fastapi import FastAPI, HTTPException, Body
 from typing import Union
-import re, os, tempfile, subprocess
-import requests
-from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, HttpUrl
 
+import math
+import re
+import os
+import tempfile
+import subprocess
+import requests
+
 app = FastAPI()
+
 
 class Req(BaseModel):
     file_url: HttpUrl
@@ -15,9 +19,6 @@ class Req(BaseModel):
     supports: bool = False
     copies: int = 1
 
-import re
-
-import math
 
 def parse_filament_g(gcode: str, material: str = "PLA", filament_diameter_mm: float = 1.75) -> float:
     # 1) Try grams directly
@@ -32,7 +33,7 @@ def parse_filament_g(gcode: str, material: str = "PLA", filament_diameter_mm: fl
             if m:
                 return float(m.group(1))
 
-    # 2) Try filament length (mm or m)
+    # 2) Try filament length (mm or m) then convert to grams
     length_mm = None
     length_patterns = [
         (r"filament used \[mm\]\s*=\s*([0-9.]+)", "mm"),
@@ -53,18 +54,17 @@ def parse_filament_g(gcode: str, material: str = "PLA", filament_diameter_mm: fl
         return 0.0
 
     # Density (g/cm³)
-    mat = material.upper()
-    density = 1.24  # PLA
+    mat = str(material).upper()
+    density = 1.24  # PLA default
     if mat == "PETG":
         density = 1.27
 
     radius_mm = filament_diameter_mm / 2.0
     area_mm2 = math.pi * (radius_mm ** 2)
     volume_mm3 = area_mm2 * length_mm
-    volume_cm3 = volume_mm3 / 1000.0
+    volume_cm3 = volume_mm3 / 1000.0  # 1000 mm^3 = 1 cm^3
 
     return volume_cm3 * density
-
 
 
 def parse_time_seconds(txt: str) -> int:
@@ -75,13 +75,17 @@ def parse_time_seconds(txt: str) -> int:
     h = int(re.search(r"(\d+)\s*h", s).group(1)) if re.search(r"(\d+)\s*h", s) else 0
     m_ = int(re.search(r"(\d+)\s*m", s).group(1)) if re.search(r"(\d+)\s*m", s) else 0
     se = int(re.search(r"(\d+)\s*s", s).group(1)) if re.search(r"(\d+)\s*s", s) else 0
-    return h*3600 + m_*60 + se
+    return h * 3600 + m_ * 60 + se
+
 
 def download(url: str, out_path: str):
-    r = requests.get(url, timeout=90)
+    # Add a user-agent to avoid intermittent blocks/partial responses from some hosts/CDNs
+    headers = {"User-Agent": "Mozilla/5.0"}
+    r = requests.get(url, headers=headers, timeout=120)
     r.raise_for_status()
     with open(out_path, "wb") as f:
         f.write(r.content)
+
 
 def slice_with_prusa(model_path: str, out_gcode: str, material: str, quality: str, supports: bool):
     base = "profiles/base.ini"
@@ -99,24 +103,20 @@ def slice_with_prusa(model_path: str, out_gcode: str, material: str, quality: st
         "--load", qual,
     ]
 
-    # PrusaSlicer CLI: supports are enabled by adding --support-material (no value).
-    # If supports=False, we simply do NOT include the flag. :contentReference[oaicite:1]{index=1}
+    # Enable supports only by adding the flag (no 0/1 values!)
     if supports:
         cmd += ["--support-material"]
 
     cmd += [
         "--export-gcode",
         f"--output={out_gcode}",
-        model_path
+        model_path,
     ]
 
     p = subprocess.run(cmd, capture_output=True, text=True)
     if p.returncode != 0:
         raise RuntimeError((p.stderr or p.stdout)[:1200])
 
-
-
-from fastapi import Request
 
 @app.post("/estimate")
 def estimate(payload: Union[Req, str] = Body(...)):
@@ -140,16 +140,21 @@ def estimate(payload: Union[Req, str] = Body(...)):
 
             gcode = open(out_gcode, "r", encoding="utf-8", errors="ignore").read()
             g = parse_filament_g(gcode, req.material)
-
             t = parse_time_seconds(gcode)
 
-            if g < 0 or t < 0:
+            if t < 0:
                 raise RuntimeError("Failed to read slicer output")
 
-            return {
+            resp = {
                 "print_time_seconds": t * max(1, req.copies),
-                "filament_g": round(g * max(1, req.copies), 2)
+                "filament_g": round(g * max(1, req.copies), 2),
             }
+
+            # If filament still ends up 0, expose header lines for debugging
+            if g == 0:
+                resp["debug_header"] = gcode.splitlines()[:60]
+
+            return resp
 
     except HTTPException:
         raise

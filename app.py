@@ -238,3 +238,17 @@ def estimate(payload: Union[Req, str] = Body(...)):
         raise
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+
+from fastapi import Request
+import os
+
+@app.post("/stripe-webhook")
+async def stripe_webhook(request: Request):
+    # For now: just accept and log it (simple test)
+    payload = await request.body()
+    print("Stripe webhook received:", payload[:200])  # prints first 200 bytes
+    return {"ok": True}
+
+
